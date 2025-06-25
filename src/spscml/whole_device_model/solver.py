@@ -80,7 +80,7 @@ class Solver():
         return jax.lax.scan(scanner, (ics, 300.0, 0), jnp.arange(Nt))
 
 
-    def implicit_euler_step(self, y, Vp, T, n, dt, sheath_solve):
+    #def implicit_euler_step(self, y, Vp, T, n, dt, sheath_solve):
         '''
         Perform a single implicit-Euler step of the RLC circuit equations
 
@@ -105,7 +105,52 @@ class Solver():
         # You'll need to implement:
         # - A residual function that accepts a guess [Q, V]^n+1 and returns the error in the implicit step
         # - A call to optx.root_find that performs the Newton solve with self.rootfinder
-        raise NotImplementedError("HACKATHON: implement Implicit Euler step")
+    def implicit_euler_step(self, y, Vp, T, n, dt, sheath_solve):
+        
+        Qn, Qdotn = y
+
+        def residual_helper(y, Ip):
+        Qnext, Vpnext = y
+        factor = self.Lp / (self.L - self.Lp)
+        V_Rp = (1 - factor) * (Vpnext - factor * (-Qnext / self.C - self.R * Ip))
+        r = jnp.array([
+        Qnext - Qn - dt * Ip,
+        -Ip + Qdotn + dt/(self.L - self.Lp) * (-Qnext/self.C - self.R*Ip + V_Rp)
+        ])
+        return r
+        
+        def residual(y):
+        Qnext, Vpnext = y
+        Ip = sheath_solve(Vpnext, T, n)
+        return residual_helper(y, Ip)
+        
+        
+        def jac_residual(y):
+        Q, Vp = y
+        dQ = Q * 1e-6
+        dV = Vp * 1e-6
+        e1 = jnp.array([dQ, 0.])
+        e2 = jnp.array([0., dV])
+        jr1 = (residual(y + e1) - residual(y - e1)) / (2*dQ)
+        jr2 = (residual(y + e2) - residual(y - e2)) / (2*dV)
+        J = jnp.stack([jr1, jr2], axis=1)
+        return J
+        
+        
+        guess = jnp.array([Qn, Vp])
+        
+        # Newton iteration
+        for i in range(3):
+        jax.debug.print("guess = {}", guess)
+        r_val = residual(guess)
+        jax.debug.print("residual = {}", r_val)
+        J = jac_residual(guess)
+        step = -jnp.linalg.solve(J, r_val)
+        guess = guess + step
+        
+        Q, V = guess
+        Ip = sheath_solve(V, T, n)
+        return jnp.array([Q, Ip]), V
 
 
     def log_progress(self, t, y, Vp):
